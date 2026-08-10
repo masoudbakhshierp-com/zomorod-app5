@@ -1,0 +1,61 @@
+name: Build release APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # این پروژه gradlew ندارد (AI Studio همیشه یک Gradle مشترک آماده
+      # دارد و wrapper تولید نمی‌کند) — به‌جایش از اکشن رسمی setup-gradle
+      # استفاده می‌کنیم که خودش نسخه‌ی درست Gradle را نصب می‌کند.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      # مقادیر SUPABASE_URL و DRIVER_API_KEY را باید از قبل در
+      # GitHub -> Settings -> Secrets and variables -> Actions اضافه کرده
+      # باشید. این مرحله همان فایل .env محلی را می‌سازد (که در .gitignore
+      # است و هیچ‌وقت commit نمی‌شود) تا پلاگین Secrets Gradle آن را بخواند.
+      - name: Write .env from secrets
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" > .env
+          echo "DRIVER_API_KEY=${{ secrets.DRIVER_API_KEY }}" >> .env
+
+      # کیستور امضا هم باید از قبل به صورت base64 در یک secret به اسم
+      # KEYSTORE_BASE64 ذخیره شده باشد:
+      #   base64 -w0 my-upload-key.jks | pbcopy   (مک)
+      #   base64 -w0 my-upload-key.jks             (لینوکس، خروجی را کپی کنید)
+      - name: Decode signing keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > my-upload-key.jks
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
+
+      - name: Remove keystore from the runner
+        if: always()
+        run: rm -f my-upload-key.jks .env
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zomorod-driver-release
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 30
